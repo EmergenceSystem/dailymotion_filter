@@ -76,11 +76,10 @@ parse_timeout(Bin) when is_binary(Bin) ->
 parse_timeout(Int) when is_integer(Int) -> Int;
 parse_timeout(_) -> 10.
 
-%% --- Extraction principale adaptée à la structure réelle Dailymotion ---
 extract_video_links_from_html(Html, TimeoutSecs) ->
     try
         io:format("[DM] HTML parsing...~n", []),
-        ParsedHtml = mochiweb_html:parse(Html),
+        ParsedHtml = parse_dm_video_links(Html),
         io:format("[DM] HTML parsed. Preview: ~s~n", [binary:part(Html, 0, min(1000, byte_size(Html)))]),
         StartTime = erlang:system_time(millisecond),
         Timeout = TimeoutSecs * 1000,
@@ -98,7 +97,33 @@ extract_video_links_from_html(Html, TimeoutSecs) ->
             []
     end.
 
-%% Trouve tous les <div data-testid="video-card"> dans le DOM
+-spec parse_dm_video_links(binary()) -> [#{properties => map()}].
+parse_dm_video_links(HtmlBin) when is_binary(HtmlBin) ->
+    Html = binary_to_list(HtmlBin),
+    parse_dm_video_links(Html, []).
+
+%% Recursive search for <a href="/video/...">...</a> in HTML
+parse_dm_video_links(Html, Acc) ->
+    case re:run(Html, "<a[^>]+href=\"\\(/video/[^\"]+\\)\"[^>]*>\\(.*?\\)</a>", [global, {capture, [1,2], list}]) of
+        {match, Matches} ->
+            Embryos = [
+                #{
+                    properties => #{
+                        <<"url">> => list_to_binary("https://www.dailymotion.com" ++ Link),
+                        <<"resume">> => string:trim(list_to_binary(strip_html(Txt)))
+                    }
+                }
+                || [Link, Txt] <- Matches
+            ],
+            Embryos ++ Acc;
+        nomatch ->
+            Acc
+    end.
+
+%% Remove any remaining tags inside anchor text (strip tags from video titles)
+strip_html(Text) ->
+    re:replace(Text, "<[^>]+>", "", [global]).
+
 find_video_cards_in_dom(Node) ->
     find_video_cards_in_dom(Node, []).
 
@@ -113,7 +138,6 @@ find_video_cards_in_dom({_Tag, _Attrs, Children}, Acc) when is_list(Children) ->
     lists:foldl(fun(C, A) -> find_video_cards_in_dom(C, A) end, Acc, Children);
 find_video_cards_in_dom(_Other, Acc) -> Acc.
 
-%% Trouve le premier <a href="/video/..."> descendant d'un video-card
 find_first_video_link_in_card({_, _, Children}) ->
     find_first_video_link_in_card_rec(Children);
 find_first_video_link_in_card(_) -> none.
@@ -140,7 +164,6 @@ find_first_video_link_in_card_rec([{_Tag, _Attrs, Children}|Rest]) ->
 find_first_video_link_in_card_rec([_Other|Rest]) ->
     find_first_video_link_in_card_rec(Rest).
 
-%% Transforme chaque <a> en embryo, avec timeout
 process_video_links([], _StartTime, _Timeout, Acc) ->
     lists:reverse(Acc);
 process_video_links([LinkElement | Rest], StartTime, Timeout, Acc) ->
