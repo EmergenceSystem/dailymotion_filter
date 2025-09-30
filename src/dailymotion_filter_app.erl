@@ -1,11 +1,10 @@
 -module(dailymotion_filter_app).
 -behaviour(application).
--behaviour(cowboy_handler).
 
 %% Application callbacks
 -export([start/2, stop/1]).
-%% Cowboy handler callbacks
--export([init/2, terminate/3]).
+%% Handler callbacks
+-export([handle/1]).
 
 -define(SEARCH_URL, "https://www.dailymotion.com/search/").
 
@@ -20,36 +19,21 @@ start(_StartType, _StartArgs) ->
 stop(_State) ->
     ok.
 
-%%% ===================================================================
-%%% Cowboy handler behavior
-%%% ===================================================================
+%% @doc Handle incoming requests from the filter server.
+%% This function is called by em_filter_server through Wade.
+%% @param Body The request body (JSON binary or string)
+%% @return JSON response as binary or string
+handle(Body) when is_binary(Body) ->
+    handle(binary_to_list(Body));
 
-init(Req0, State) ->
-    io:format("[DM] Handler started~n", []),
-    try
-        {ok, Body, Req} = cowboy_req:read_body(Req0),
-        io:format("[DM] Received request body: ~p~n", [Body]),
-        EmbryoList = generate_embryo_list(Body),
-        Response = #{embryo_list => EmbryoList},
-        EncodedResponse = jsone:encode(Response),
-        Req2 = cowboy_req:reply(200,
-            #{<<"content-type">> => <<"application/json">>},
-            EncodedResponse,
-            Req
-        ),
-        {ok, Req2, State}
-    catch
-        Error:Reason:Stack ->
-            io:format("[DM][ERROR] Handler: ~p:~p~n~p~n", [Error, Reason, Stack]),
-            ReqError = cowboy_req:reply(500,
-                #{<<"content-type">> => <<"application/json">>},
-                <<"{\"error\":\"Internal server error\"}">>,
-                Req0
-            ),
-            {ok, ReqError, State}
-    end.
+handle(Body) when is_list(Body) ->
+    io:format("Bing Filter received body: ~p~n", [Body]),
+    EmbryoList = generate_embryo_list(list_to_binary(Body)),
+    Response = #{embryo_list => EmbryoList},
+    jsone:encode(Response);
 
-terminate(_Reason, _Req, _State) -> ok.
+handle(_) ->
+    jsone:encode(#{error => <<"Invalid request body">>}).
 
 %%% ===================================================================
 %%% Private functions
